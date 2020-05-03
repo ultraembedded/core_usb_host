@@ -52,6 +52,10 @@
 // Defines:
 //-----------------------------------------------------------------
 #define USB_CTRL          0x0
+    #define USB_CTRL_TX_FLUSH                    8
+    #define USB_CTRL_TX_FLUSH_SHIFT              8
+    #define USB_CTRL_TX_FLUSH_MASK               0x1
+
     #define USB_CTRL_PHY_DMPULLDOWN              7
     #define USB_CTRL_PHY_DMPULLDOWN_SHIFT        7
     #define USB_CTRL_PHY_DMPULLDOWN_MASK         0x1
@@ -69,10 +73,6 @@
 
     #define USB_CTRL_PHY_OPMODE_SHIFT            1
     #define USB_CTRL_PHY_OPMODE_MASK             0x3
-
-    #define USB_CTRL_TX_FLUSH                    1
-    #define USB_CTRL_TX_FLUSH_SHIFT              1
-    #define USB_CTRL_TX_FLUSH_MASK               0x1
 
     #define USB_CTRL_ENABLE_SOF                  0
     #define USB_CTRL_ENABLE_SOF_SHIFT            0
@@ -371,9 +371,9 @@ static void usbhw_hub_reset(struct ue11 *ue11)
 
     // Power-up / SE0
     val = 0;
-    val |= (1 << USB_CTRL_PHY_XCVRSELECT_SHIFT);
+    val |= (0 << USB_CTRL_PHY_XCVRSELECT_SHIFT);
     val |= (0 << USB_CTRL_PHY_TERMSELECT_SHIFT);
-    val |= (0 << USB_CTRL_PHY_OPMODE_SHIFT);
+    val |= (2 << USB_CTRL_PHY_OPMODE_SHIFT);
     val |= (1 << USB_CTRL_PHY_DPPULLDOWN_SHIFT);
     val |= (1 << USB_CTRL_PHY_DMPULLDOWN_SHIFT);
 

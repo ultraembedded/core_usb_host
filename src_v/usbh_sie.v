@@ -1,8 +1,8 @@
 //-----------------------------------------------------------------
 //                     USB Full Speed Host
-//                           V0.5
+//                           V0.6
 //                     Ultra-Embedded.com
-//                     Copyright 2015-2019
+//                     Copyright 2015-2020
 //
 //                 Email: admin@ultra-embedded.com
 //
@@ -33,6 +33,15 @@
 //-----------------------------------------------------------------
 
 module usbh_sie
+//-----------------------------------------------------------------
+// Params
+//-----------------------------------------------------------------
+#(
+     parameter USB_CLK_FREQ     = 48000000
+)
+//-----------------------------------------------------------------
+// Ports
+//-----------------------------------------------------------------
 (
     // Inputs
      input           clk_i
@@ -51,6 +60,7 @@ module usbh_sie
     ,input  [  7:0]  utmi_data_i
     ,input           utmi_rxvalid_i
     ,input           utmi_rxactive_i
+    ,input  [  1:0]  utmi_linestate_i
 
     // Outputs
     ,output          ack_o
@@ -85,9 +95,7 @@ reg [7:0]           status_response_q;
 reg [15:0]          byte_count_q;
 reg                 in_transfer_q;
 
-reg [2:0]           rx_time_q;
-reg                 rx_time_en_q;
-reg [7:0]           last_tx_time_q;
+reg [8:0]           last_tx_time_q;
 
 reg                 send_data1_q;
 reg                 send_sof_q;
@@ -111,8 +119,9 @@ reg [3:0]           state_q;
 //-----------------------------------------------------------------
 // Definitions
 //-----------------------------------------------------------------
-localparam RX_TIMEOUT       = 8'd255; // ~5uS @ 48MHz
-localparam TX_IFS           = 8'd7; // 2 FS bit times (x5 CLKs @ 60MHz, x4 CLKs @ 48MHz)
+localparam RX_TIMEOUT       = (USB_CLK_FREQ == 60000000) ? 9'd511 : 9'd255;
+ // 2 FS bit times (x5 CLKs @ 60MHz, x4 CLKs @ 48MHz)
+localparam TX_IFS           = (USB_CLK_FREQ == 60000000) ? 4'd10  : 4'd7; 
 
 localparam PID_OUT          = 8'hE1;
 localparam PID_IN           = 8'h69;
@@ -141,10 +150,6 @@ localparam STATE_TX_WAIT    = 4'd10;
 localparam STATE_RX_WAIT    = 4'd11;
 localparam STATE_TX_IFS     = 4'd12;
 
-localparam RX_TIME_ZERO     = 3'd0;
-localparam RX_TIME_INC      = 3'd1;
-localparam RX_TIME_READY    = 3'd7; // 2-bit times (x5 CLKs @ 60MHz, x4 CLKs @ 48MHz)
-
 //-----------------------------------------------------------------
 // Wires
 //-----------------------------------------------------------------
@@ -153,15 +158,13 @@ wire [7:0] rx_data_w;
 wire       data_ready_w;
 wire       crc_byte_w;
 wire       rx_active_w;
+wire       rx_active_rise_w;
 
-// 2-bit times after last RX (inter-packet delay)?
-wire autoresp_thresh_w = send_ack_q & rx_time_en_q & (rx_time_q == RX_TIME_READY);
+// Tx/Rx -> Tx IFS timeout
+wire ifs_busy_w;
 
 // Response timeout (no response after 500uS from transmit)
 wire rx_resp_timeout_w = (last_tx_time_q >= RX_TIMEOUT) & wait_resp_q;
-
-// Tx - Tx IFS timeout
-wire tx_ifs_ready_w    = (last_tx_time_q >= TX_IFS);
 
 // CRC16 error on received data
 wire crc_error_w = (state_q == STATE_RX_DATA) && !rx_active_w && in_transfer_q        &&
@@ -225,7 +228,7 @@ begin
         STATE_TX_IFS :
         begin
             // IFS expired
-            if (tx_ifs_ready_w)
+            if (~ifs_busy_w)
             begin
                 // SOF - no data packet
                 if (send_sof_q)
@@ -286,7 +289,7 @@ begin
         STATE_TX_WAIT :
         begin
             // Waited long enough?
-            if (autoresp_thresh_w)
+            if (~ifs_busy_w)
                 next_state_r = STATE_TX_ACKNAK;
         end        
         //-----------------------------------------
@@ -362,17 +365,70 @@ else if (state_q == STATE_TX_TOKEN1 && utmi_txready_i)
     token_q[4:0]    <= crc5_next_w;
 
 //-----------------------------------------------------------------
+// Tx EOP - detect end of transmit (token, data or ACK/NAK)
+//-----------------------------------------------------------------
+reg [1:0] utmi_linestate_q;
+reg       se0_detect_q;
+reg       wait_eop_q;
+
+always @ (posedge clk_i or posedge rst_i)
+if (rst_i)
+    utmi_linestate_q <= 2'b0;
+else
+    utmi_linestate_q <= utmi_linestate_i;
+
+// SE0 filtering (2 cycles FS)
+wire se0_detect_w = (utmi_linestate_q == 2'b00 && utmi_linestate_i == 2'b00);
+
+always @ (posedge clk_i or posedge rst_i)
+if (rst_i)
+    se0_detect_q <= 1'b0;
+else
+    se0_detect_q <= se0_detect_w;
+
+// TODO: This needs updating for HS USB...
+wire eop_detected_w = se0_detect_q & (utmi_linestate_i != 2'b00);
+
+// End of transmit detection
+always @ (posedge clk_i or posedge rst_i)
+if (rst_i)
+    wait_eop_q <= 1'b0;
+else if (eop_detected_w)
+    wait_eop_q <= 1'b0;
+else if ((state_q == STATE_TX_CRC2   && next_state_r != STATE_TX_CRC2)   ||
+         (state_q == STATE_TX_TOKEN3 && next_state_r != STATE_TX_TOKEN3) ||
+         (state_q == STATE_TX_ACKNAK && next_state_r != STATE_TX_ACKNAK))
+    wait_eop_q <= 1'b1;
+else if (rx_active_rise_w)
+    wait_eop_q <= 1'b1;
+
+localparam TX_IFS_W = 4;
+reg [TX_IFS_W-1:0] tx_ifs_q;
+
+always @ (posedge clk_i or posedge rst_i)
+if (rst_i)
+    tx_ifs_q <= {(TX_IFS_W){1'b0}};
+// Start counting down from last Tx or EOP being detected at end of Rx
+else if (wait_eop_q || eop_detected_w)
+    tx_ifs_q <= TX_IFS;
+// Decrement IFS counter
+else if (tx_ifs_q !=  {(TX_IFS_W){1'b0}})
+    tx_ifs_q <= tx_ifs_q - 1;
+
+assign ifs_busy_w = wait_eop_q || (tx_ifs_q != {(TX_IFS_W){1'b0}});
+
+//-----------------------------------------------------------------
 // Tx Timer
 //-----------------------------------------------------------------
 always @ (posedge clk_i or posedge rst_i)
 if (rst_i)
-    last_tx_time_q <= 8'd0;
+    last_tx_time_q <= 9'd0;
 // Start counting from last Tx
 else if (state_q == STATE_IDLE || (utmi_txvalid_o && utmi_txready_i))
-    last_tx_time_q <= 8'd0;
+    last_tx_time_q <= 9'd0;
 // Increment the Tx timeout
 else if (last_tx_time_q != RX_TIMEOUT)
-    last_tx_time_q <= last_tx_time_q + 8'd1;
+    last_tx_time_q <= last_tx_time_q + 9'd1;
 
 //-----------------------------------------------------------------
 // Transmit / Receive counter
@@ -439,31 +495,8 @@ begin
 end
 
 //-----------------------------------------------------------------
-// Response delay timer
-//-----------------------------------------------------------------
-always @ (posedge clk_i or posedge rst_i)
-if (rst_i)
-begin
-    rx_time_q       <= RX_TIME_ZERO;
-    rx_time_en_q    <= 1'b0;
-end
-else if (state_q == STATE_IDLE)
-begin
-    rx_time_q       <= RX_TIME_ZERO;
-    rx_time_en_q    <= 1'b0;
-end
-// Receive complete
-else if (state_q == STATE_RX_DATA && !utmi_rxactive_i)
-begin
-    // Reset time since end of last data byte
-    rx_time_q       <= RX_TIME_ZERO;
-    rx_time_en_q    <= 1'b1;
-end
-// Increment timer if enabled (and less than the threshold)
-else if (rx_time_en_q && rx_time_q != RX_TIME_READY)
-    rx_time_q       <= rx_time_q + RX_TIME_INC;
-
 // Response expected
+//-----------------------------------------------------------------
 always @ (posedge clk_i or posedge rst_i)
 if (rst_i)
     wait_resp_q <= 1'b0;
@@ -600,6 +633,8 @@ assign rx_data_w    = data_buffer_q[7:0];
 assign data_ready_w = data_valid_q[0];
 assign crc_byte_w   = data_crc_q[0];
 assign rx_active_w  = rx_active_q[0];
+
+assign rx_active_rise_w = !rx_active_q[3] && utmi_rxactive_i;
 
 //-----------------------------------------------------------------
 // CRC

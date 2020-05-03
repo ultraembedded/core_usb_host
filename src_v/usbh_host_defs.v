@@ -1,8 +1,8 @@
 //-----------------------------------------------------------------
 //                     USB Full Speed Host
-//                           V0.5
+//                           V0.6
 //                     Ultra-Embedded.com
-//                     Copyright 2015-2019
+//                     Copyright 2015-2020
 //
 //                 Email: admin@ultra-embedded.com
 //
@@ -33,6 +33,13 @@
 //-----------------------------------------------------------------
 
 `define USB_CTRL    8'h0
+
+    `define USB_CTRL_TX_FLUSH      8
+    `define USB_CTRL_TX_FLUSH_DEFAULT    0
+    `define USB_CTRL_TX_FLUSH_B          8
+    `define USB_CTRL_TX_FLUSH_T          8
+    `define USB_CTRL_TX_FLUSH_W          1
+    `define USB_CTRL_TX_FLUSH_R          8:8
 
     `define USB_CTRL_PHY_DMPULLDOWN      7
     `define USB_CTRL_PHY_DMPULLDOWN_DEFAULT    0
@@ -66,13 +73,6 @@
     `define USB_CTRL_PHY_OPMODE_T          2
     `define USB_CTRL_PHY_OPMODE_W          2
     `define USB_CTRL_PHY_OPMODE_R          2:1
-
-    `define USB_CTRL_TX_FLUSH      1
-    `define USB_CTRL_TX_FLUSH_DEFAULT    0
-    `define USB_CTRL_TX_FLUSH_B          1
-    `define USB_CTRL_TX_FLUSH_T          1
-    `define USB_CTRL_TX_FLUSH_W          1
-    `define USB_CTRL_TX_FLUSH_R          1:1
 
     `define USB_CTRL_ENABLE_SOF      0
     `define USB_CTRL_ENABLE_SOF_DEFAULT    0

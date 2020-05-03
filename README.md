@@ -15,7 +15,6 @@ The core requires a 48MHz/60MHz clock input, which the AXI4-Lite and UTMI interf
 
 ##### Limitations
 * Only tested for USB-FS (Full Speed / 12Mbit/s) only.
-* AXI4-L address and data must arrive in the same cycle.
 
 ##### Testing
 
@@ -28,8 +27,7 @@ Verified under simulation and on FPGA with various USB devices attached (hubs, m
 * [UTMI to ULPI Conversion](https://github.com/ultraembedded/cores/tree/master/ulpi_wrapper)
 
 ##### Configuration
-* SOF_THRESHOLD  - Number of clock cycles per millisecond (default: 48000 for 48MHz)
-* CLKS_PER_BIT   - Number of clock cycles per FS bit (default: 4 for 48MHz)
+* USB_CLK_FREQ  - Core clock frequency (supports: 60000000 or 48000000)
 
 ##### Size / Performance
 
@@ -57,12 +55,12 @@ With the default configuration...
 
 | Bits | Name | Description    |
 | ---- | ---- | -------------- |
+| 8 | TX_FLUSH | Flush Tx FIFO |
 | 7 | PHY_DMPULLDOWN | UTMI PHY D+ Pulldown Enable |
 | 6 | PHY_DPPULLDOWN | UTMI PHY D+ Pulldown Enable |
 | 5 | PHY_TERMSELECT | UTMI PHY Termination Select |
 | 4:3 | PHY_XCVRSELECT | UTMI PHY Transceiver Select |
 | 2:1 | PHY_OPMODE | UTMI PHY Output Mode |
-| 1 | TX_FLUSH | Flush Tx FIFO |
 | 0 | ENABLE_SOF | Enable SOF (start of frame) packet generation |
 
 ##### Register: USB_STATUS

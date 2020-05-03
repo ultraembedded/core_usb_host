@@ -1,8 +1,8 @@
 //-----------------------------------------------------------------
 //                     USB Full Speed Host
-//                           V0.5
+//                           V0.6
 //                     Ultra-Embedded.com
-//                     Copyright 2015-2019
+//                     Copyright 2015-2020
 //
 //                 Email: admin@ultra-embedded.com
 //
