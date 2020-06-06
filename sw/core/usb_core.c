@@ -113,134 +113,6 @@ static int usb_control_read(struct usb_device *dev, uint8_t *p, int length)
     return res;
 }
 //-----------------------------------------------------------------
-// usb_set_device_address: Set device address
-//-----------------------------------------------------------------
-static int usb_set_device_address(struct usb_device *dev, int device_address)
-{
-    return usb_send_control_write(dev,         /* current address */
-                                (REQDIR_HOSTTODEVICE | REQREC_DEVICE | REQTYPE_STANDARD),
-                                REQ_SET_ADDRESS,
-                                (uint16_t) device_address, /* value */
-                                0,              /* index */
-                                0,              /* length*/
-                                0               /* data pointer */
-                                );
-}
-//-----------------------------------------------------------------
-// usb_set_configuration: Select device configuration
-//-----------------------------------------------------------------
-static int usb_set_configuration(struct usb_device *dev, uint8_t configuration)
-{
-    int i;
-    int j;
-
-    // Reset endpoint toggle to DATA0
-    for (j=0;j<MAX_INTERFACES;j++)
-        for (i=0;i<MAX_ENDPOINTS;i++)
-            dev->interfaces[j].endpoint[i].data_toggle = 0;
-
-    return usb_send_control_write(dev,
-                                (REQDIR_HOSTTODEVICE | REQREC_DEVICE | REQTYPE_STANDARD),
-                                REQ_SET_CONFIGURATION,
-                                configuration,  /* value */
-                                0,              /* index */
-                                0,              /* length*/
-                                0               /* data pointer */
-                                );
-}
-//-----------------------------------------------------------------
-// usb_get_configuration: Retrieve device configuration
-//-----------------------------------------------------------------
-static int usb_get_configuration(struct usb_device *dev, uint8_t *configuration)
-{
-    int res = usb_send_control_read(dev,
-                                (REQDIR_DEVICETOHOST | REQREC_DEVICE | REQTYPE_STANDARD), /* bmRequestType */
-                                REQ_GET_CONFIGURATION, /* bRequest */
-                                0, /* wValue */
-                                0, /* wIndex */
-                                1, /* wLength*/
-                                configuration,
-                                1);
-    return res;
-}
-//-----------------------------------------------------------------
-// usb_get_descriptor:
-//-----------------------------------------------------------------
-static int usb_get_descriptor(struct usb_device *dev, uint16_t value, uint16_t index, uint8_t *buffer, uint16_t length)
-{
-    struct usb_endpoint *endp = &dev->interfaces[0].endpoint[0];
-
-    // Perform initial descriptor fetch
-    int res = usb_send_control_read(dev,
-                                (REQDIR_DEVICETOHOST | REQREC_DEVICE | REQTYPE_STANDARD), /* bmRequestType */
-                                REQ_GET_DESCRIPTOR, /* bRequest */
-                                (value<<8), /* wValue */
-                                index, /* wIndex */
-                                length, /* wLength*/
-                                buffer,
-                                endp->max_packet_size);
-    int received = endp->max_packet_size;
-
-    // Read more data after initial setup?
-    while (res && received < length)
-    {
-        res = usb_control_read(dev, &buffer[received], endp->max_packet_size);
-        if (res < 0)
-            break;
-
-        received         += res;
-        endp->data_toggle = !endp->data_toggle;
-    }
-
-    // On success, send ZLP for STATUS stage
-    if (res >= 0)
-        usb_send_zlp(dev->address, PID_DATA1);
-    else
-        received = -1;
-
-    return received;
-}
-//-----------------------------------------------------------------
-// usb_send_control_read:
-//-----------------------------------------------------------------
-int usb_send_control_read(struct usb_device *dev, uint8_t request_type, uint8_t request, uint16_t value, uint16_t index, uint16_t length, uint8_t *rx_buf, uint16_t rx_length)
-{
-    struct usb_endpoint *endp = &dev->interfaces[0].endpoint[0];
-    int res;
-    int retries = 0;
-
-    USBLOG(USBLOG_INFO, ("USB: Control Read %x %x %x %x %x\n", request_type, request, value, index, length));
-
-    do
-    {
-        // SETUP + DATA0 + ACK (device)
-        endp->data_toggle = 0;
-        res = usb_setup_packet(dev->address, request_type, request, value, index, length);
-        if (res)
-        {
-            // IN + DATA1(device) + ACK
-            endp->data_toggle = 1;
-            res = usb_control_read(dev, rx_buf, rx_length);
-            if (res < 0)
-            {
-                USBLOG(USBLOG_ERR, ("USB: Control Read IN failed\n"));
-                res = 0;
-            }
-            else
-                res = 1;
-        }
-        else
-        {
-            USBLOG(USBLOG_ERR, ("USB: Control Read SETUP failed\n"));
-        }
-    }
-    while (!res && retries++ < USB_CONTROL_RETRIES);
-
-    USBLOG(USBLOG_INFO, ("USB: Control Read E%d\n", res));
-
-    return res;
-}
-//-----------------------------------------------------------------
 // usb_send_control_write:
 //-----------------------------------------------------------------
 int usb_send_control_write(struct usb_device *dev, uint8_t request_type, uint8_t request, uint16_t value, uint16_t index, uint16_t length, uint8_t *data)
@@ -249,15 +121,15 @@ int usb_send_control_write(struct usb_device *dev, uint8_t request_type, uint8_t
     int res;
     int retries = 0;
 
-    USBLOG(USBLOG_INFO, ("USB: Control Write %x %x %x %x %x\n", request_type, request, value, index, length));
-
     do
     {
-        // SETUP + DATA0 + ACK (device)
+        USBLOG(USBLOG_INFO, ("USB: Control Write %x %x %x %x %x\n", request_type, request, value, index, length));
+
+        // Setup Stage: SETUP + DATA0 + ACK (device)
         endp->data_toggle = 0;
         res = usb_setup_packet(dev->address, request_type, request, value, index, length);
 
-        // [Optional] Data packet
+        // [Optional] Data Stage
         if (res && length && data)
         {
             int remain = length;
@@ -288,6 +160,7 @@ int usb_send_control_write(struct usb_device *dev, uint8_t request_type, uint8_t
             }
         }
 
+        // Status Stage
         if (res)
         {
             // Response should be DATAx (ZLP)
@@ -315,6 +188,137 @@ int usb_send_control_write(struct usb_device *dev, uint8_t request_type, uint8_t
 
     return res;
 }
+//-----------------------------------------------------------------
+// usb_send_control_read:
+//-----------------------------------------------------------------
+int usb_send_control_read(struct usb_device *dev, uint8_t request_type, uint8_t request, uint16_t value, uint16_t index, uint16_t length, uint8_t *buffer, uint16_t rx_length)
+{
+    struct usb_endpoint *endp = &dev->interfaces[0].endpoint[0];
+    int res;
+    int retries = 0;
+    int received = 0;
+
+    uint16_t initial_len = endp->max_packet_size;
+    if (initial_len > rx_length)
+        initial_len = rx_length;
+
+    // Setup stage: SETUP
+    do
+    {
+        USBLOG(USBLOG_INFO, ("USB: Control Read %x %x %x %x %x\n", request_type, request, value, index, length));
+
+        endp->data_toggle = 0;
+        res = usb_setup_packet(dev->address, request_type, request, value, index, length);
+        endp->data_toggle = 1;
+
+        USBLOG(USBLOG_INFO, ("USB: Control Read E%d\n", res));
+    }
+    while (!res && retries++ < USB_CONTROL_RETRIES);
+
+    if (!res)
+        return -1;
+
+    // Data stage: Read some data
+    while (res && received < rx_length)
+    {
+        res = usb_control_read(dev, &buffer[received], endp->max_packet_size);
+        if (res < 0)
+            break;
+
+        received         += res;
+        endp->data_toggle = !endp->data_toggle;
+    }
+
+    // Status stage (if ok)
+    if (res >= 0)
+        usb_send_zlp(dev->address, PID_DATA1);
+    else
+        received = -1;
+
+    return received;
+}
+//-----------------------------------------------------------------
+// usb_set_device_address: Set device address
+//-----------------------------------------------------------------
+static int usb_set_device_address(struct usb_device *dev, int device_address)
+{
+    USBLOG(USBLOG_INFO, ("USB: Set device address %d\n", device_address));
+
+    int res = usb_send_control_write(dev,         /* current address */
+                                (REQDIR_HOSTTODEVICE | REQREC_DEVICE | REQTYPE_STANDARD),
+                                REQ_SET_ADDRESS,
+                                (uint16_t) device_address, /* value */
+                                0,              /* index */
+                                0,              /* length*/
+                                0               /* data pointer */
+                                );
+
+    // Device has 50mS to apply the address
+    usbhw_timer_sleep(50);
+
+    return res;
+}
+//-----------------------------------------------------------------
+// usb_set_configuration: Select device configuration
+//-----------------------------------------------------------------
+static int usb_set_configuration(struct usb_device *dev, uint8_t configuration)
+{
+    USBLOG(USBLOG_INFO, ("USB: Set configuration %d\n", configuration));
+    int i;
+    int j;
+    int res;
+
+    // Reset endpoint toggle to DATA0
+    for (j=0;j<MAX_INTERFACES;j++)
+        for (i=0;i<MAX_ENDPOINTS;i++)
+            dev->interfaces[j].endpoint[i].data_toggle = 0;
+
+    res = usb_send_control_write(dev,
+                                (REQDIR_HOSTTODEVICE | REQREC_DEVICE | REQTYPE_STANDARD),
+                                REQ_SET_CONFIGURATION,
+                                configuration,  /* value */
+                                0,              /* index */
+                                0,              /* length*/
+                                0               /* data pointer */
+                                );
+
+    // Give time for the device to apply the configuration
+    usbhw_timer_sleep(10);
+
+    return res;
+}
+//-----------------------------------------------------------------
+// usb_get_configuration: Retrieve device configuration
+//-----------------------------------------------------------------
+static int usb_get_configuration(struct usb_device *dev, uint8_t *configuration)
+{
+    USBLOG(USBLOG_INFO, ("USB: Get configuration\n"));
+    int res = usb_send_control_read(dev,
+                                (REQDIR_DEVICETOHOST | REQREC_DEVICE | REQTYPE_STANDARD), /* bmRequestType */
+                                REQ_GET_CONFIGURATION, /* bRequest */
+                                0, /* wValue */
+                                0, /* wIndex */
+                                1, /* wLength*/
+                                configuration,
+                                1);
+    return res;
+}
+//-----------------------------------------------------------------
+// usb_get_descriptor:
+//-----------------------------------------------------------------
+static int usb_get_descriptor(struct usb_device *dev, uint16_t value, uint16_t index, uint8_t *buffer, uint16_t length)
+{
+    USBLOG(USBLOG_INFO, ("USB: Get descriptor value=%d, index=%d, length=%d\n", value, index, length));
+    return usb_send_control_read(dev,
+                                (REQDIR_DEVICETOHOST | REQREC_DEVICE | REQTYPE_STANDARD), /* bmRequestType */
+                                REQ_GET_DESCRIPTOR, /* bRequest */
+                                (value<<8), /* wValue */
+                                index, /* wIndex */
+                                length, /* wLength*/
+                                buffer,
+                                length);
+}
+
 //-----------------------------------------------------------------
 // usb_clear_stall:
 //-----------------------------------------------------------------
@@ -522,14 +526,14 @@ int usb_configure_device(struct usb_device *dev, int device_address)
 
     dev->interfaces[0].endpoint[0].max_packet_size = sizeof(struct UsbDeviceDescriptor);
 
-    // Get full device descriptor
+    // Get device descriptor
     dev_desc = (struct UsbDeviceDescriptor *)&_desc_buffer[0];
     res = usb_get_descriptor(dev, DESC_DEVICE, 0, _desc_buffer, sizeof(struct UsbDeviceDescriptor));
     if (res < 0)
     {
         USBLOG(USBLOG_ERR, ("Fetch DESC_DEVICE failed\n"));
         return 0;
-    }    
+    }
 
     // Set device address away from default
     res = usb_set_device_address(dev, device_address);
